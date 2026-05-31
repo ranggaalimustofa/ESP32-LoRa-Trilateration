@@ -84,6 +84,7 @@ void loop() {
         }
     }
 
+    
     // Pastikan koneksi MQTT aktif
     if (!mqttClient.connected()) {
         reconnectMQTT();
@@ -108,6 +109,8 @@ void loop() {
 //
 void checkResetButton() {
     pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
+    pinMode(INDICATOR_LED_PIN, OUTPUT);
+    digitalWrite(INDICATOR_LED_PIN, LOW); // LED Mati secara default
 
     if (digitalRead(RESET_BUTTON_PIN) != LOW) return;  // Tidak ditekan
 
@@ -128,16 +131,30 @@ void checkResetButton() {
             Serial.printf("[ANCHOR-%d] Ditahan: %lu detik...\n", ANCHOR_ID, held / 1000 + 1);
         }
 
-        // Tandai sudah lewat 3 detik
-        if (!reached3s && held >= HOLD_PORTAL_IP_MS) {
+        // Tandai sudah lewat 3 detik -> LED Menyala Solid
+        if (!reached3s && held >= HOLD_PORTAL_IP_MS && held < HOLD_RESET_TOTAL_MS) {
             reached3s = true;
+            digitalWrite(INDICATOR_LED_PIN, HIGH); // LED Menyala Solid
             Serial.printf("[ANCHOR-%d] >> Lepas sekarang untuk Portal Server IP\n", ANCHOR_ID);
             Serial.printf("[ANCHOR-%d] >> Tahan terus untuk Reset TOTAL\n", ANCHOR_ID);
+        }
+
+        // Sudah 6 detik → LED Berkedip Cepat (Kedip)
+        if (held >= HOLD_RESET_TOTAL_MS) {
+            digitalWrite(INDICATOR_LED_PIN, (millis() / 200) % 2 == 0 ? HIGH : LOW);
         }
 
         // Sudah 6 detik → reset total
         if (held >= HOLD_RESET_TOTAL_MS) {
             Serial.printf("[ANCHOR-%d] RESET TOTAL — Menghapus WiFi + Server IP...\n", ANCHOR_ID);
+            
+            // Efek kedip sangat cepat selama 1.5 detik sebagai indikator konfirmasi reset total sebelum reboot
+            for (int i = 0; i < 30; i++) {
+                digitalWrite(INDICATOR_LED_PIN, !digitalRead(INDICATOR_LED_PIN));
+                delay(50);
+            }
+            digitalWrite(INDICATOR_LED_PIN, LOW);
+
             WiFiManager wm;
             wm.resetSettings();
             prefs.begin("anchor-cfg", false);
@@ -147,21 +164,30 @@ void checkResetButton() {
             delay(300);
             ESP.restart();
         }
+        delay(10); // Ringankan beban CPU
     }
 
     // Tombol dilepas antara 3–6 detik → portal Server IP saja
     unsigned long held = millis() - pressTime;
-    if (held >= HOLD_PORTAL_IP_MS) {
+    if (held >= HOLD_PORTAL_IP_MS && held < HOLD_RESET_TOTAL_MS) {
+        digitalWrite(INDICATOR_LED_PIN, HIGH); // Pastikan LED menyala solid saat masuk portal
         Serial.printf("[ANCHOR-%d] Membuka portal update MQTT Broker...\n", ANCHOR_ID);
         // WiFi sudah tersimpan, konek dulu lalu buka portal
         WiFi.begin();
         unsigned long t = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - t < 15000) delay(300);
+        while (WiFi.status() != WL_CONNECTED && millis() - t < 15000) {
+            // Biarkan LED berkedip lambat saat mencoba koneksi WiFi sebelum masuk portal
+            digitalWrite(INDICATOR_LED_PIN, (millis() / 500) % 2 == 0 ? HIGH : LOW);
+            delay(100);
+        }
+        digitalWrite(INDICATOR_LED_PIN, HIGH); // Menyala solid saat portal terbuka
         openServerIPPortal();
+        digitalWrite(INDICATOR_LED_PIN, LOW); // Matikan LED setelah selesai
         ESP.restart();
     }
 
     // Dilepas sebelum 3 detik → batal
+    digitalWrite(INDICATOR_LED_PIN, LOW); // Pastikan mati
     Serial.printf("[ANCHOR-%d] Tombol dilepas, boot normal.\n", ANCHOR_ID);
 }
 
@@ -228,6 +254,7 @@ void initWiFi() {
     wm.addParameter(paramServerIP);
 
     wm.setAPCallback([](WiFiManager *mgr) {
+        digitalWrite(INDICATOR_LED_PIN, HIGH); // LED Menyala Solid saat portal aktif
         Serial.printf("[ANCHOR-%d] Portal konfigurasi aktif!\n", ANCHOR_ID);
         Serial.printf("[ANCHOR-%d] Sambung ke WiFi 'Anchor-%d' (pass: %s)\n",
                       ANCHOR_ID, ANCHOR_ID, WIFI_AP_PASSWORD);
@@ -264,9 +291,12 @@ void initWiFi() {
     snprintf(apName, sizeof(apName), "Anchor-%d", ANCHOR_ID);
 
     if (!wm.autoConnect(apName, WIFI_AP_PASSWORD)) {
+        digitalWrite(INDICATOR_LED_PIN, LOW); // Matikan LED jika gagal/timeout
         Serial.printf("[ANCHOR-%d] Timeout WiFi. Restart...\n", ANCHOR_ID);
         ESP.restart();
     }
+
+    digitalWrite(INDICATOR_LED_PIN, LOW); // Matikan LED jika koneksi WiFi sukses
 
     Serial.printf("[ANCHOR-%d] WiFi OK — SSID: %s | IP: %s\n",
                   ANCHOR_ID,
@@ -408,4 +438,4 @@ void reconnectMQTT() {
             delay(5000);
         }
     }
-}
+}

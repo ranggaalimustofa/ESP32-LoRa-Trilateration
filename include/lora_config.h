@@ -28,6 +28,9 @@
 #define HOLD_PORTAL_IP_MS    3000   // 3 detik → portal Server IP
 #define HOLD_RESET_TOTAL_MS  6000   // 6 detik → reset total
 
+// ─── LED Indikator (GPIO16) ──────────────────────────────────────────────────
+#define INDICATOR_LED_PIN    16
+
 // ─── MQTT Configurations ─────────────────────────────────────────────────────
 #define MQTT_BROKER_DEFAULT  "broker.emqx.io"
 #define MQTT_PORT            1883
