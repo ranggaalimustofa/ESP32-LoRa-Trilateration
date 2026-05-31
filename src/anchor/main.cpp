@@ -4,7 +4,7 @@
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
-#include <HTTPClient.h>
+#include <PubSubClient.h>
 #include <Preferences.h>
 #include "lora_config.h"
 #include "packet.h"
@@ -30,11 +30,15 @@ void   sendReportToServer(const AnchorReport &report);
 void   saveServerIP(const char *ip);
 String loadServerIP();
 bool   isValidIP(const String &ip);
+void   reconnectMQTT();
+float  rssiToDistance(int rssi);
 
 // ─── Global ──────────────────────────────────────────────────────────────────
 Preferences            prefs;
-String                 serverIP = "";
+String                 serverIP = ""; // Berfungsi sebagai MQTT Broker Address
 WiFiManagerParameter  *paramServerIP;
+WiFiClient             espClient;
+PubSubClient           mqttClient(espClient);
 
 // ─────────────────────────────────────────────────────────────────────────────
 void setup() {
@@ -51,17 +55,20 @@ void setup() {
     // Init WiFi
     initWiFi();
 
-    // Tampilkan Server IP yang akan digunakan
-    Serial.printf("[ANCHOR-%d] Server IP: %s\n", ANCHOR_ID, serverIP.c_str());
+    // Tampilkan Server IP/Broker yang akan digunakan
+    Serial.printf("[ANCHOR-%d] MQTT Broker IP: %s\n", ANCHOR_ID, serverIP.c_str());
+
+    // Konfigurasi Server MQTT
+    mqttClient.setServer(serverIP.c_str(), MQTT_PORT);
 
     // Init LoRa
     initLoRa();
 
-    Serial.printf("[ANCHOR-%d] Ready | IP: %s | Server: %s:%d\n",
+    Serial.printf("[ANCHOR-%d] Ready | IP: %s | Broker: %s:%d\n",
                   ANCHOR_ID,
                   WiFi.localIP().toString().c_str(),
                   serverIP.c_str(),
-                  SERVER_PORT);
+                  MQTT_PORT);
 }
 
 void loop() {
@@ -76,6 +83,12 @@ void loop() {
             ESP.restart();
         }
     }
+
+    // Pastikan koneksi MQTT aktif
+    if (!mqttClient.connected()) {
+        reconnectMQTT();
+    }
+    mqttClient.loop();
 
     // Polling LoRa
     int packetSize = LoRa.parsePacket();
@@ -139,7 +152,7 @@ void checkResetButton() {
     // Tombol dilepas antara 3–6 detik → portal Server IP saja
     unsigned long held = millis() - pressTime;
     if (held >= HOLD_PORTAL_IP_MS) {
-        Serial.printf("[ANCHOR-%d] Membuka portal update Server IP...\n", ANCHOR_ID);
+        Serial.printf("[ANCHOR-%d] Membuka portal update MQTT Broker...\n", ANCHOR_ID);
         // WiFi sudah tersimpan, konek dulu lalu buka portal
         WiFi.begin();
         unsigned long t = millis();
@@ -152,7 +165,7 @@ void checkResetButton() {
     Serial.printf("[ANCHOR-%d] Tombol dilepas, boot normal.\n", ANCHOR_ID);
 }
 
-// ─── Portal khusus update Server IP (tanpa reset WiFi) ───────────────────────
+// ─── Portal khusus update MQTT Broker (tanpa reset WiFi) ───────────────────────
 void openServerIPPortal() {
     char apName[20];
     snprintf(apName, sizeof(apName), "Anchor-%d", ANCHOR_ID);
@@ -160,14 +173,14 @@ void openServerIPPortal() {
     char savedIP[40];
     serverIP.toCharArray(savedIP, sizeof(savedIP));
 
-    WiFiManagerParameter paramIP("server_ip", "Server IP (contoh: 192.168.1.100)", savedIP, 39);
+    WiFiManagerParameter paramIP("server_ip", "MQTT Broker (contoh: broker.emqx.io)", savedIP, 39);
 
     WiFiManager wm;
     wm.addParameter(&paramIP);
     wm.setCustomHeadElement(
         "<style>body{font-family:sans-serif;} label{font-weight:bold;}</style>"
-        "<h3 style='color:#1a73e8'>Update Server IP</h3>"
-        "<p style='color:#555'>Isi IP laptop/PC yang menjalankan server Node.js.</p>"
+        "<h3 style='color:#1a73e8'>Update MQTT Broker</h3>"
+        "<p style='color:#555'>Isi alamat IP / domain MQTT Broker Anda.</p>"
     );
 
     // startConfigPortal: buka portal tanpa reset WiFi
@@ -183,20 +196,19 @@ void openServerIPPortal() {
     newIP.trim();
 
     if (newIP.length() > 0 && isValidIP(newIP)) {
-        // User mengisi IP yang valid — simpan ke NVS
+        // User mengisi yang valid — simpan ke NVS
         saveServerIP(newIP.c_str());
         serverIP = newIP;
-        Serial.printf("[ANCHOR-%d] Server IP disimpan: %s\n", ANCHOR_ID, serverIP.c_str());
+        Serial.printf("[ANCHOR-%d] MQTT Broker disimpan: %s\n", ANCHOR_ID, serverIP.c_str());
     } else if (newIP.length() > 0) {
         // User mengisi tapi format salah — tolak, pakai default
-        Serial.printf("[ANCHOR-%d] ERROR: Format IP tidak valid: '%s'\n", ANCHOR_ID, newIP.c_str());
-        Serial.printf("[ANCHOR-%d] Format benar: xxx.xxx.xxx.xxx\n", ANCHOR_ID);
-        serverIP = SERVER_IP_DEFAULT;
-        Serial.printf("[ANCHOR-%d] Menggunakan IP default: %s\n", ANCHOR_ID, serverIP.c_str());
+        Serial.printf("[ANCHOR-%d] ERROR: Format Broker tidak valid: '%s'\n", ANCHOR_ID, newIP.c_str());
+        serverIP = MQTT_BROKER_DEFAULT;
+        Serial.printf("[ANCHOR-%d] Menggunakan Broker default: %s\n", ANCHOR_ID, serverIP.c_str());
     } else {
         // User tidak mengisi — pakai default
-        serverIP = SERVER_IP_DEFAULT;
-        Serial.printf("[ANCHOR-%d] Server IP tidak diisi, menggunakan default: %s\n",
+        serverIP = MQTT_BROKER_DEFAULT;
+        Serial.printf("[ANCHOR-%d] MQTT Broker tidak diisi, menggunakan default: %s\n",
                       ANCHOR_ID, serverIP.c_str());
     }
 }
@@ -209,7 +221,7 @@ void initWiFi() {
     serverIP.toCharArray(savedIP, sizeof(savedIP));
 
     paramServerIP = new WiFiManagerParameter(
-        "server_ip", "Server IP (contoh: 192.168.1.100)", savedIP, 39
+        "server_ip", "MQTT Broker (contoh: broker.emqx.io)", savedIP, 39
     );
 
     WiFiManager wm;
@@ -220,29 +232,28 @@ void initWiFi() {
         Serial.printf("[ANCHOR-%d] Sambung ke WiFi 'Anchor-%d' (pass: %s)\n",
                       ANCHOR_ID, ANCHOR_ID, WIFI_AP_PASSWORD);
         Serial.printf("[ANCHOR-%d] Lalu buka browser: http://192.168.4.1\n", ANCHOR_ID);
-        Serial.printf("[ANCHOR-%d] Isi SSID WiFi + Server IP lalu klik Save.\n", ANCHOR_ID);
+        Serial.printf("[ANCHOR-%d] Isi SSID WiFi + MQTT Broker lalu klik Save.\n", ANCHOR_ID);
     });
 
     wm.setSaveConfigCallback([]() {
         String newIP = String(paramServerIP->getValue());
         newIP.trim();
         if (newIP.length() > 0 && isValidIP(newIP)) {
-            // User mengisi IP yang valid — simpan ke NVS
+            // User mengisi yang valid — simpan ke NVS
             saveServerIP(newIP.c_str());
             serverIP = newIP;
-            Serial.printf("[ANCHOR-%d] Server IP disimpan: %s\n", ANCHOR_ID, serverIP.c_str());
+            Serial.printf("[ANCHOR-%d] MQTT Broker disimpan: %s\n", ANCHOR_ID, serverIP.c_str());
         } else if (newIP.length() > 0) {
             // Format salah — tolak, pakai default
-            Serial.printf("[ANCHOR-%d] ERROR: Format IP tidak valid: '%s'\n", ANCHOR_ID, newIP.c_str());
-            Serial.printf("[ANCHOR-%d] Format benar: xxx.xxx.xxx.xxx\n", ANCHOR_ID);
-            serverIP = SERVER_IP_DEFAULT;
-            saveServerIP(SERVER_IP_DEFAULT);
-            Serial.printf("[ANCHOR-%d] Menggunakan IP default: %s\n", ANCHOR_ID, serverIP.c_str());
+            Serial.printf("[ANCHOR-%d] ERROR: Format Broker tidak valid: '%s'\n", ANCHOR_ID, newIP.c_str());
+            serverIP = MQTT_BROKER_DEFAULT;
+            saveServerIP(MQTT_BROKER_DEFAULT);
+            Serial.printf("[ANCHOR-%d] Menggunakan Broker default: %s\n", ANCHOR_ID, serverIP.c_str());
         } else {
             // Tidak diisi — pakai default
-            serverIP = SERVER_IP_DEFAULT;
-            saveServerIP(SERVER_IP_DEFAULT);
-            Serial.printf("[ANCHOR-%d] Server IP tidak diisi, menggunakan default: %s\n",
+            serverIP = MQTT_BROKER_DEFAULT;
+            saveServerIP(MQTT_BROKER_DEFAULT);
+            Serial.printf("[ANCHOR-%d] MQTT Broker tidak diisi, menggunakan default: %s\n",
                           ANCHOR_ID, serverIP.c_str());
         }
     });
@@ -263,22 +274,15 @@ void initWiFi() {
                   WiFi.localIP().toString().c_str());
 }
 
-// ─── NVS: Simpan & Load Server IP ────────────────────────────────────────────
-// ─── Validasi format IP (xxx.xxx.xxx.xxx) ────────────────────────────────────
+// ─── NVS: Simpan & Load Server/Broker IP ─────────────────────────────────────
+// ─── Validasi format IP / Domain Hostname ────────────────────────────────────
 bool isValidIP(const String &ip) {
-    int dots = 0, start = 0;
-    for (int i = 0; i <= (int)ip.length(); i++) {
-        if (i == (int)ip.length() || ip[i] == '.') {
-            if (i == start) return false;
-            int val = ip.substring(start, i).toInt();
-            if (val < 0 || val > 255) return false;
-            if (i < (int)ip.length()) dots++;
-            start = i + 1;
-        } else if (!isdigit((unsigned char)ip[i])) {
-            return false;
-        }
+    if (ip.length() == 0) return false;
+    for (int i = 0; i < (int)ip.length(); i++) {
+        char c = ip[i];
+        if (!isalnum(c) && c != '.' && c != '-') return false;
     }
-    return dots == 3;
+    return true;
 }
 
 void saveServerIP(const char *ip) {
@@ -289,8 +293,8 @@ void saveServerIP(const char *ip) {
 
 String loadServerIP() {
     prefs.begin("anchor-cfg", true);
-    // Jika NVS kosong, gunakan SERVER_IP_DEFAULT dari lora_config.h
-    String ip = prefs.getString("server_ip", SERVER_IP_DEFAULT);
+    // Jika NVS kosong, gunakan MQTT_BROKER_DEFAULT
+    String ip = prefs.getString("server_ip", MQTT_BROKER_DEFAULT);
     prefs.end();
     return ip;
 }
@@ -348,45 +352,60 @@ bool parsePacket(AnchorReport &report) {
     return true;
 }
 
-// ─── Kirim laporan ke server via HTTP POST ───────────────────────────────────
+// ─── Kalibrasi RSSI -> Jarak (dalam meter) ───────────────────────────────────
+float rssiToDistance(int rssi) {
+    if (rssi >= RSSI_1M) return 0.1f;
+    float power = (float)(RSSI_1M - rssi) / (10.0f * PATH_LOSS_EXP);
+    return pow(10, power);
+}
+
+// ─── Kirim laporan ke server via MQTT ────────────────────────────────────────
 void sendReportToServer(const AnchorReport &report) {
-    if (serverIP.length() == 0) {
-        Serial.printf("[ANCHOR-%d] WARN: Server IP kosong, paket dibuang.\n", ANCHOR_ID);
-        return;
+    if (!mqttClient.connected()) {
+        reconnectMQTT();
     }
 
-    StaticJsonDocument<200> doc;
-    doc["anchor"]    = report.anchor_id;
-    doc["tag"]       = report.tag_id;
-    doc["seq"]       = report.seq;
-    doc["tag_ts"]    = report.tag_ts;
-    doc["anchor_ts"] = report.anchor_ts;
-    doc["rssi"]      = report.rssi;
-    doc["snr"]       = report.snr;
-    doc["ax"]        = ANCHOR_X;
-    doc["ay"]        = ANCHOR_Y;
+    float distance = rssiToDistance(report.rssi);
+
+    StaticJsonDocument<256> doc;
+    doc["tagId"] = "tag-" + String(report.tag_id);
+    doc["battery"] = 100;
+    
+    JsonArray anchors = doc.createNestedArray("anchors");
+    JsonObject anchorObj = anchors.createNestedObject();
+    anchorObj["anchorId"] = report.anchor_id;
+    anchorObj["distance"] = distance;
+    anchorObj["rssi"] = report.rssi;
+    anchorObj["snr"] = report.snr;
+    anchorObj["x"] = ANCHOR_X;
+    anchorObj["y"] = ANCHOR_Y;
 
     String payload;
     serializeJson(doc, payload);
 
-    String url = String("http://") + serverIP + ":" + SERVER_PORT + SERVER_PATH;
-    HTTPClient http;
-    http.begin(url);
-    http.addHeader("Content-Type", "application/json");
-    http.setTimeout(HTTP_TIMEOUT_MS);
-
-    int httpCode = http.POST(payload);
-
-    if (httpCode == 200) {
-        Serial.printf("[ANCHOR-%d] OK → Tag=%d | Seq=%d | RSSI=%d dBm | SNR=%d dB\n",
-                      report.anchor_id, report.tag_id,
-                      report.seq, report.rssi, report.snr);
+    if (mqttClient.publish(MQTT_TOPIC, payload.c_str())) {
+        Serial.printf("[ANCHOR-%d] MQTT OK → Topic: %s | Tag=%d | Seq=%d | RSSI=%d dBm | Dist=%.2fm\n",
+                      ANCHOR_ID, MQTT_TOPIC, report.tag_id,
+                      report.seq, report.rssi, distance);
     } else {
-        Serial.printf("[ANCHOR-%d] HTTP ERROR %d — %s\n", ANCHOR_ID, httpCode, url.c_str());
+        Serial.printf("[ANCHOR-%d] MQTT PUBLISH FAILED! Topic: %s\n", ANCHOR_ID, MQTT_TOPIC);
     }
-
-    http.end();
 }
 
-// ─── Validasi format IP (xxx.xxx.xxx.xxx) ────────────────────────────────────
-// Return true jika IP valid (4 oktet, masing-masing 0-255)
+// ─── Koneksi Ulang MQTT ──────────────────────────────────────────────────────
+void reconnectMQTT() {
+    while (!mqttClient.connected()) {
+        Serial.printf("[ANCHOR-%d] Menghubungkan ke MQTT Broker di %s:%d...\n", 
+                      ANCHOR_ID, serverIP.c_str(), MQTT_PORT);
+        
+        String clientId = "ESP32-Anchor-" + String(ANCHOR_ID) + "-" + String(random(1000, 9999));
+        
+        if (mqttClient.connect(clientId.c_str())) {
+            Serial.printf("[ANCHOR-%d] MQTT Terhubung!\n", ANCHOR_ID);
+        } else {
+            Serial.printf("[ANCHOR-%d] Gagal terhubung, rc=%d. Coba lagi dalam 5 detik...\n", 
+                          ANCHOR_ID, mqttClient.state());
+            delay(5000);
+        }
+    }
+}

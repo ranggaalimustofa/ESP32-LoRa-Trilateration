@@ -28,10 +28,11 @@
 #define HOLD_PORTAL_IP_MS    3000   // 3 detik → portal Server IP
 #define HOLD_RESET_TOTAL_MS  6000   // 6 detik → reset total
 
-// ─── HTTP Server ─────────────────────────────────────────────────────────────
-// Jika user tidak mengisi Server IP di portal, IP ini yang digunakan.
-// Ganti sesuai IP PC/laptop Anda.
-#define SERVER_IP_DEFAULT  "192.168.1.194"
-#define SERVER_PORT        5000
-#define SERVER_PATH        "/api/anchor-report"
-#define HTTP_TIMEOUT_MS    3000
+// ─── MQTT Configurations ─────────────────────────────────────────────────────
+#define MQTT_BROKER_DEFAULT  "broker.emqx.io"
+#define MQTT_PORT            1883
+#define MQTT_TOPIC           "room/positioning/updates"
+
+// ─── Path Loss Model (RSSI -> Jarak) ─────────────────────────────────────────
+#define PATH_LOSS_EXP        2.7f
+#define RSSI_1M              -40
