@@ -7,6 +7,7 @@
 #include <WiFiManager.h>
 #include <PubSubClient.h>
 #include <Preferences.h>
+#include <ArduinoOTA.h>
 #include "lora_config.h"
 #include "packet.h"
 
@@ -29,6 +30,7 @@ bool   parsePacket(AnchorReport &report);
 void   sendReportToServer(const AnchorReport &report);
 void   reconnectMQTT();
 float  rssiToDistance(int rssi);
+void   initOTA();
 
 // ─── Global ──────────────────────────────────────────────────────────────────
 Preferences            prefs;
@@ -50,6 +52,9 @@ void setup() {
     // Init WiFi
     initWiFi();
 
+    // Init OTA
+    initOTA();
+
     // Tampilkan Server IP/Broker yang akan digunakan
     Serial.printf("[ANCHOR-%d] MQTT Broker IP: %s\n", ANCHOR_ID, MQTT_BROKER_DEFAULT);
 
@@ -68,6 +73,9 @@ void setup() {
 }
 
 void loop() {
+    // Proses OTA handle
+    ArduinoOTA.handle();
+
     // Reconnect WiFi jika putus
     if (WiFi.status() != WL_CONNECTED) {
         Serial.printf("[ANCHOR-%d] WiFi putus, reconnecting...\n", ANCHOR_ID);
@@ -342,4 +350,56 @@ void reconnectMQTT() {
             }
         }
     }
+}
+
+// ─── Inisialisasi OTA (Over The Air) Updates ─────────────────────────────────
+void initOTA() {
+    char hostName[30];
+    snprintf(hostName, sizeof(hostName), "Anchor-Node-%d", ANCHOR_ID);
+    ArduinoOTA.setHostname(hostName);
+    
+    // Opsional: berikan password keamanan untuk upload OTA
+    // ArduinoOTA.setPassword("anchorota123");
+
+    ArduinoOTA.onStart([]() {
+        String type;
+        if (ArduinoOTA.getCommand() == U_FLASH) {
+            type = "sketch";
+        } else { // U_SPIFFS
+            type = "filesystem";
+        }
+        Serial.println("[OTA] Mulai update " + type);
+        digitalWrite(INDICATOR_LED_PIN, HIGH); // Nyalakan LED solid saat mulai
+    });
+
+    ArduinoOTA.onEnd([]() {
+        Serial.println("\n[OTA] Update Berhasil Selesai!");
+        // Berkedip cepat 10 kali sebagai selebrasi keberhasilan ota sebelum restart otomatis
+        for (int i = 0; i < 10; i++) {
+            digitalWrite(INDICATOR_LED_PIN, HIGH);
+            delay(50);
+            digitalWrite(INDICATOR_LED_PIN, LOW);
+            delay(50);
+        }
+    });
+
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("[OTA] Progress: %u%%\r", (progress / (total / 100)));
+        // Berkedip dinamis saat kemajuan transfer data berjalan
+        digitalWrite(INDICATOR_LED_PIN, !digitalRead(INDICATOR_LED_PIN));
+    });
+
+    ArduinoOTA.onError([](ota_error_t error) {
+        Serial.printf("[OTA] Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+        
+        digitalWrite(INDICATOR_LED_PIN, LOW); // Matikan LED jika error
+    });
+
+    ArduinoOTA.begin();
+    Serial.printf("[OTA] Layanan OTA Aktif | Hostname: %s\n", hostName);
 }
