@@ -322,14 +322,24 @@ void reconnectMQTT() {
         Serial.printf("[ANCHOR-%d] Menghubungkan ke MQTT Broker di %s:%d...\n", 
                       ANCHOR_ID, MQTT_BROKER_DEFAULT, MQTT_PORT);
         
+        // Nyalakan LED saat mulai menghubungkan
+        digitalWrite(INDICATOR_LED_PIN, HIGH);
+        
         String clientId = "ESP32-Anchor-" + String(ANCHOR_ID) + "-" + String(random(1000, 9999));
         
         if (mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASS)) {
             Serial.printf("[ANCHOR-%d] MQTT Terhubung!\n", ANCHOR_ID);
+            digitalWrite(INDICATOR_LED_PIN, LOW); // Matikan LED ketika berhasil terhubung
         } else {
             Serial.printf("[ANCHOR-%d] Gagal terhubung, rc=%d. Coba lagi dalam 5 detik...\n", 
                           ANCHOR_ID, mqttClient.state());
-            delay(5000);
+            
+            // Berkedip selama 5 detik penantian sebelum mencoba lagi
+            unsigned long startDelay = millis();
+            while (millis() - startDelay < 5000) {
+                digitalWrite(INDICATOR_LED_PIN, (millis() / 250) % 2 == 0 ? HIGH : LOW);
+                delay(50);
+            }
         }
     }
 }
