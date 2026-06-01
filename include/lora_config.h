@@ -29,7 +29,7 @@
 #define HOLD_RESET_TOTAL_MS  6000   // 6 detik → reset total
 
 // ─── LED Indikator (GPIO16) ──────────────────────────────────────────────────
-#define INDICATOR_LED_PIN    16
+#define INDICATOR_LED_PIN    16 // WiFi indicator
 
 // ─── MQTT Configurations ─────────────────────────────────────────────────────
 #if __has_include("credentials.h")
