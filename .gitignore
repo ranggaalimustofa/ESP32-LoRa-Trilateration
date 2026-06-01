@@ -14,3 +14,6 @@
 # === OS Specific ===
 .DS_Store
 Thumbs.db
+
+# === Secrets ===
+include/credentials.h

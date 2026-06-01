@@ -3,6 +3,7 @@
 #include <LoRa.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <WiFiManager.h>
 #include <PubSubClient.h>
 #include <Preferences.h>
@@ -23,21 +24,15 @@
 // ─── Prototypes ──────────────────────────────────────────────────────────────
 void   checkResetButton();
 void   initWiFi();
-void   openServerIPPortal();
 void   initLoRa();
 bool   parsePacket(AnchorReport &report);
 void   sendReportToServer(const AnchorReport &report);
-void   saveServerIP(const char *ip);
-String loadServerIP();
-bool   isValidIP(const String &ip);
 void   reconnectMQTT();
 float  rssiToDistance(int rssi);
 
 // ─── Global ──────────────────────────────────────────────────────────────────
 Preferences            prefs;
-String                 serverIP = ""; // Berfungsi sebagai MQTT Broker Address
-WiFiManagerParameter  *paramServerIP;
-WiFiClient             espClient;
+WiFiClientSecure       espClient;
 PubSubClient           mqttClient(espClient);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,10 +51,11 @@ void setup() {
     initWiFi();
 
     // Tampilkan Server IP/Broker yang akan digunakan
-    Serial.printf("[ANCHOR-%d] MQTT Broker IP: %s\n", ANCHOR_ID, serverIP.c_str());
+    Serial.printf("[ANCHOR-%d] MQTT Broker IP: %s\n", ANCHOR_ID, MQTT_BROKER_DEFAULT);
 
     // Konfigurasi Server MQTT
-    mqttClient.setServer(serverIP.c_str(), MQTT_PORT);
+    espClient.setInsecure();
+    mqttClient.setServer(MQTT_BROKER_DEFAULT, MQTT_PORT);
 
     // Init LoRa
     initLoRa();
@@ -67,7 +63,7 @@ void setup() {
     Serial.printf("[ANCHOR-%d] Ready | IP: %s | Broker: %s:%d\n",
                   ANCHOR_ID,
                   WiFi.localIP().toString().c_str(),
-                  serverIP.c_str(),
+                  MQTT_BROKER_DEFAULT,
                   MQTT_PORT);
 }
 
@@ -104,8 +100,8 @@ void loop() {
 // ─── Cek Tombol BOOT saat startup ────────────────────────────────────────────
 //
 //  Tidak ditekan          → boot normal
-//  Tahan 3 detik          → buka portal update Server IP (WiFi tetap)
-//  Tahan 6 detik          → reset TOTAL (hapus WiFi + Server IP)
+//  Tahan 3 detik          → buka portal konfigurasi WiFi (WiFi tetap)
+//  Tahan 6 detik          → reset TOTAL (hapus WiFi)
 //
 void checkResetButton() {
     pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
@@ -115,7 +111,7 @@ void checkResetButton() {
     if (digitalRead(RESET_BUTTON_PIN) != LOW) return;  // Tidak ditekan
 
     Serial.printf("[ANCHOR-%d] Tombol BOOT ditekan...\n", ANCHOR_ID);
-    Serial.printf("[ANCHOR-%d]  3 detik = Portal Server IP\n", ANCHOR_ID);
+    Serial.printf("[ANCHOR-%d]  3 detik = Portal Konfigurasi WiFi\n", ANCHOR_ID);
     Serial.printf("[ANCHOR-%d]  6 detik = Reset TOTAL\n", ANCHOR_ID);
 
     unsigned long pressTime = millis();
@@ -135,7 +131,7 @@ void checkResetButton() {
         if (!reached3s && held >= HOLD_PORTAL_IP_MS && held < HOLD_RESET_TOTAL_MS) {
             reached3s = true;
             digitalWrite(INDICATOR_LED_PIN, HIGH); // LED Menyala Solid
-            Serial.printf("[ANCHOR-%d] >> Lepas sekarang untuk Portal Server IP\n", ANCHOR_ID);
+            Serial.printf("[ANCHOR-%d] >> Lepas sekarang untuk Portal Konfigurasi WiFi\n", ANCHOR_ID);
             Serial.printf("[ANCHOR-%d] >> Tahan terus untuk Reset TOTAL\n", ANCHOR_ID);
         }
 
@@ -146,7 +142,7 @@ void checkResetButton() {
 
         // Sudah 6 detik → reset total
         if (held >= HOLD_RESET_TOTAL_MS) {
-            Serial.printf("[ANCHOR-%d] RESET TOTAL — Menghapus WiFi + Server IP...\n", ANCHOR_ID);
+            Serial.printf("[ANCHOR-%d] RESET TOTAL — Menghapus WiFi...\n", ANCHOR_ID);
             
             // Efek kedip sangat cepat selama 1.5 detik sebagai indikator konfirmasi reset total sebelum reboot
             for (int i = 0; i < 30; i++) {
@@ -167,21 +163,26 @@ void checkResetButton() {
         delay(10); // Ringankan beban CPU
     }
 
-    // Tombol dilepas antara 3–6 detik → portal Server IP saja
+    // Tombol dilepas antara 3–6 detik → portal konfigurasi WiFi saja
     unsigned long held = millis() - pressTime;
     if (held >= HOLD_PORTAL_IP_MS && held < HOLD_RESET_TOTAL_MS) {
         digitalWrite(INDICATOR_LED_PIN, HIGH); // Pastikan LED menyala solid saat masuk portal
-        Serial.printf("[ANCHOR-%d] Membuka portal update MQTT Broker...\n", ANCHOR_ID);
-        // WiFi sudah tersimpan, konek dulu lalu buka portal
-        WiFi.begin();
-        unsigned long t = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - t < 15000) {
-            // Biarkan LED berkedip lambat saat mencoba koneksi WiFi sebelum masuk portal
-            digitalWrite(INDICATOR_LED_PIN, (millis() / 500) % 2 == 0 ? HIGH : LOW);
-            delay(100);
-        }
-        digitalWrite(INDICATOR_LED_PIN, HIGH); // Menyala solid saat portal terbuka
-        openServerIPPortal();
+        Serial.printf("[ANCHOR-%d] Membuka portal konfigurasi WiFi...\n", ANCHOR_ID);
+        
+        WiFiManager wm;
+        wm.setAPCallback([](WiFiManager *mgr) {
+            digitalWrite(INDICATOR_LED_PIN, HIGH);
+            Serial.printf("[ANCHOR-%d] Portal konfigurasi WiFi manual aktif!\n", ANCHOR_ID);
+            Serial.printf("[ANCHOR-%d] Sambung ke WiFi 'Anchor-%d' (pass: %s)\n",
+                          ANCHOR_ID, ANCHOR_ID, WIFI_AP_PASSWORD);
+            Serial.printf("[ANCHOR-%d] Lalu buka browser: http://192.168.4.1\n", ANCHOR_ID);
+        });
+        wm.setConfigPortalTimeout(WIFI_TIMEOUT_SEC);
+        
+        char apName[20];
+        snprintf(apName, sizeof(apName), "Anchor-%d", ANCHOR_ID);
+        wm.startConfigPortal(apName, WIFI_AP_PASSWORD);
+        
         digitalWrite(INDICATOR_LED_PIN, LOW); // Matikan LED setelah selesai
         ESP.restart();
     }
@@ -191,67 +192,9 @@ void checkResetButton() {
     Serial.printf("[ANCHOR-%d] Tombol dilepas, boot normal.\n", ANCHOR_ID);
 }
 
-// ─── Portal khusus update MQTT Broker (tanpa reset WiFi) ───────────────────────
-void openServerIPPortal() {
-    char apName[20];
-    snprintf(apName, sizeof(apName), "Anchor-%d", ANCHOR_ID);
-
-    char savedIP[40];
-    serverIP.toCharArray(savedIP, sizeof(savedIP));
-
-    WiFiManagerParameter paramIP("server_ip", "MQTT Broker (contoh: broker.emqx.io)", savedIP, 39);
-
-    WiFiManager wm;
-    wm.addParameter(&paramIP);
-    wm.setCustomHeadElement(
-        "<style>body{font-family:sans-serif;} label{font-weight:bold;}</style>"
-        "<h3 style='color:#1a73e8'>Update MQTT Broker</h3>"
-        "<p style='color:#555'>Isi alamat IP / domain MQTT Broker Anda.</p>"
-    );
-
-    // startConfigPortal: buka portal tanpa reset WiFi
-    wm.setConfigPortalTimeout(WIFI_TIMEOUT_SEC);
-
-    Serial.printf("[ANCHOR-%d] Portal aktif: sambung WiFi 'Anchor-%d' → buka http://192.168.4.1\n",
-                  ANCHOR_ID, ANCHOR_ID);
-
-    wm.startConfigPortal(apName, WIFI_AP_PASSWORD);
-
-    // Ambil nilai yang diisi user
-    String newIP = String(paramIP.getValue());
-    newIP.trim();
-
-    if (newIP.length() > 0 && isValidIP(newIP)) {
-        // User mengisi yang valid — simpan ke NVS
-        saveServerIP(newIP.c_str());
-        serverIP = newIP;
-        Serial.printf("[ANCHOR-%d] MQTT Broker disimpan: %s\n", ANCHOR_ID, serverIP.c_str());
-    } else if (newIP.length() > 0) {
-        // User mengisi tapi format salah — tolak, pakai default
-        Serial.printf("[ANCHOR-%d] ERROR: Format Broker tidak valid: '%s'\n", ANCHOR_ID, newIP.c_str());
-        serverIP = MQTT_BROKER_DEFAULT;
-        Serial.printf("[ANCHOR-%d] Menggunakan Broker default: %s\n", ANCHOR_ID, serverIP.c_str());
-    } else {
-        // User tidak mengisi — pakai default
-        serverIP = MQTT_BROKER_DEFAULT;
-        Serial.printf("[ANCHOR-%d] MQTT Broker tidak diisi, menggunakan default: %s\n",
-                      ANCHOR_ID, serverIP.c_str());
-    }
-}
-
 // ─── Inisialisasi WiFi dengan WiFiManager ────────────────────────────────────
 void initWiFi() {
-    serverIP = loadServerIP();
-
-    char savedIP[40];
-    serverIP.toCharArray(savedIP, sizeof(savedIP));
-
-    paramServerIP = new WiFiManagerParameter(
-        "server_ip", "MQTT Broker (contoh: broker.emqx.io)", savedIP, 39
-    );
-
     WiFiManager wm;
-    wm.addParameter(paramServerIP);
 
     wm.setAPCallback([](WiFiManager *mgr) {
         digitalWrite(INDICATOR_LED_PIN, HIGH); // LED Menyala Solid saat portal aktif
@@ -259,30 +202,6 @@ void initWiFi() {
         Serial.printf("[ANCHOR-%d] Sambung ke WiFi 'Anchor-%d' (pass: %s)\n",
                       ANCHOR_ID, ANCHOR_ID, WIFI_AP_PASSWORD);
         Serial.printf("[ANCHOR-%d] Lalu buka browser: http://192.168.4.1\n", ANCHOR_ID);
-        Serial.printf("[ANCHOR-%d] Isi SSID WiFi + MQTT Broker lalu klik Save.\n", ANCHOR_ID);
-    });
-
-    wm.setSaveConfigCallback([]() {
-        String newIP = String(paramServerIP->getValue());
-        newIP.trim();
-        if (newIP.length() > 0 && isValidIP(newIP)) {
-            // User mengisi yang valid — simpan ke NVS
-            saveServerIP(newIP.c_str());
-            serverIP = newIP;
-            Serial.printf("[ANCHOR-%d] MQTT Broker disimpan: %s\n", ANCHOR_ID, serverIP.c_str());
-        } else if (newIP.length() > 0) {
-            // Format salah — tolak, pakai default
-            Serial.printf("[ANCHOR-%d] ERROR: Format Broker tidak valid: '%s'\n", ANCHOR_ID, newIP.c_str());
-            serverIP = MQTT_BROKER_DEFAULT;
-            saveServerIP(MQTT_BROKER_DEFAULT);
-            Serial.printf("[ANCHOR-%d] Menggunakan Broker default: %s\n", ANCHOR_ID, serverIP.c_str());
-        } else {
-            // Tidak diisi — pakai default
-            serverIP = MQTT_BROKER_DEFAULT;
-            saveServerIP(MQTT_BROKER_DEFAULT);
-            Serial.printf("[ANCHOR-%d] MQTT Broker tidak diisi, menggunakan default: %s\n",
-                          ANCHOR_ID, serverIP.c_str());
-        }
     });
 
     if (WIFI_TIMEOUT_SEC > 0) wm.setConfigPortalTimeout(WIFI_TIMEOUT_SEC);
@@ -302,31 +221,6 @@ void initWiFi() {
                   ANCHOR_ID,
                   WiFi.SSID().c_str(),
                   WiFi.localIP().toString().c_str());
-}
-
-// ─── NVS: Simpan & Load Server/Broker IP ─────────────────────────────────────
-// ─── Validasi format IP / Domain Hostname ────────────────────────────────────
-bool isValidIP(const String &ip) {
-    if (ip.length() == 0) return false;
-    for (int i = 0; i < (int)ip.length(); i++) {
-        char c = ip[i];
-        if (!isalnum(c) && c != '.' && c != '-') return false;
-    }
-    return true;
-}
-
-void saveServerIP(const char *ip) {
-    prefs.begin("anchor-cfg", false);
-    prefs.putString("server_ip", ip);
-    prefs.end();
-}
-
-String loadServerIP() {
-    prefs.begin("anchor-cfg", true);
-    // Jika NVS kosong, gunakan MQTT_BROKER_DEFAULT
-    String ip = prefs.getString("server_ip", MQTT_BROKER_DEFAULT);
-    prefs.end();
-    return ip;
 }
 
 // ─── Inisialisasi LoRa ───────────────────────────────────────────────────────
@@ -426,11 +320,11 @@ void sendReportToServer(const AnchorReport &report) {
 void reconnectMQTT() {
     while (!mqttClient.connected()) {
         Serial.printf("[ANCHOR-%d] Menghubungkan ke MQTT Broker di %s:%d...\n", 
-                      ANCHOR_ID, serverIP.c_str(), MQTT_PORT);
+                      ANCHOR_ID, MQTT_BROKER_DEFAULT, MQTT_PORT);
         
         String clientId = "ESP32-Anchor-" + String(ANCHOR_ID) + "-" + String(random(1000, 9999));
         
-        if (mqttClient.connect(clientId.c_str())) {
+        if (mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASS)) {
             Serial.printf("[ANCHOR-%d] MQTT Terhubung!\n", ANCHOR_ID);
         } else {
             Serial.printf("[ANCHOR-%d] Gagal terhubung, rc=%d. Coba lagi dalam 5 detik...\n", 

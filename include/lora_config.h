@@ -32,8 +32,14 @@
 #define INDICATOR_LED_PIN    16
 
 // ─── MQTT Configurations ─────────────────────────────────────────────────────
-#define MQTT_BROKER_DEFAULT  "broker.emqx.io"
-#define MQTT_PORT            1883
+#if __has_include("credentials.h")
+  #include "credentials.h"
+#else
+  #define MQTT_BROKER_DEFAULT  "broker.emqx.io"
+  #define MQTT_PORT            1883
+  #define MQTT_USER            ""
+  #define MQTT_PASS            ""
+#endif
 #define MQTT_TOPIC           "room/positioning/updates"
 
 // ─── Path Loss Model (RSSI -> Jarak) ─────────────────────────────────────────
