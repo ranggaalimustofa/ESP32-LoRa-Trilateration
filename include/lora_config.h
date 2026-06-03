@@ -1,9 +1,15 @@
 #pragma once
 
-// ─── Pin LoRa (ESP32) ────────────────────────────────────────────────────────
-#define LORA_SS    5    // NSS
-#define LORA_RST   14   // RST
-#define LORA_DIO0  2    // DIO0
+// ─── Pin LoRa ────────────────────────────────────────────────────────────────
+#if defined(ARDUINO_ARCH_AVR)
+  #define LORA_SS    10   // NSS untuk Arduino Pro Mini (RFM95)
+  #define LORA_RST   9    // RST untuk Arduino Pro Mini
+  #define LORA_DIO0  2    // DIO0 untuk Arduino Pro Mini (D2 mendukung external interrupt)
+#else
+  #define LORA_SS    5    // NSS untuk ESP32
+  #define LORA_RST   14   // RST untuk ESP32
+  #define LORA_DIO0  2    // DIO0 untuk ESP32
+#endif
 
 // ─── Parameter LoRa ──────────────────────────────────────────────────────────
 #define LORA_FREQ        433E6   // Frekuensi: 433E6 / 868E6 / 915E6

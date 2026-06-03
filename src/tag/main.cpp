@@ -4,6 +4,21 @@
 #include "lora_config.h"
 #include "packet.h"
 
+// ─── AVR Compatibility ───────────────────────────────────────────────────────
+#if defined(ARDUINO_ARCH_AVR)
+#include <stdarg.h>
+void serial_printf(const char *fmt, ...) {
+    char buf[128];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    Serial.print(buf);
+}
+#else
+#define serial_printf Serial.printf
+#endif
+
 // ─── Konfigurasi Tag ──────────────────────────────────────────────────────────
 // Injeksi via build_flags: -D TAG_ID=1
 #ifndef TAG_ID
@@ -26,10 +41,10 @@ void setup() {
     Serial.begin(SERIAL_BAUD);
     while (!Serial);
 
-    Serial.printf("[TAG-%d] Booting...\n", TAG_ID);
+    serial_printf("[TAG-%d] Booting...\n", TAG_ID);
     initLoRa();
 
-    Serial.printf("[TAG-%d] Ready. Broadcasting every %d ms\n",
+    serial_printf("[TAG-%d] Ready. Broadcasting every %d ms\n",
                   TAG_ID, BROADCAST_INTERVAL_MS);
 }
 
@@ -47,7 +62,7 @@ void initLoRa() {
     LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
 
     if (!LoRa.begin(LORA_FREQ)) {
-        Serial.printf("[TAG-%d] ERROR: LoRa init failed! Halting.\n", TAG_ID);
+        serial_printf("[TAG-%d] ERROR: LoRa init failed! Halting.\n", TAG_ID);
         while (true);
     }
 
@@ -57,7 +72,7 @@ void initLoRa() {
     LoRa.setSyncWord(LORA_SYNC_WORD);
     LoRa.enableCrc();
 
-    Serial.printf("[TAG-%d] LoRa OK — SF%d, BW%.0fkHz, SyncWord=0x%02X\n",
+    serial_printf("[TAG-%d] LoRa OK — SF%d, BW%.0fkHz, SyncWord=0x%02X\n",
                   TAG_ID, LORA_SF, LORA_BW / 1000.0f, LORA_SYNC_WORD);
 }
 
@@ -74,6 +89,6 @@ void broadcastTag() {
     LoRa.write((uint8_t *)&pkt, sizeof(TagPacket));
     LoRa.endPacket();   // Blocking — tunggu sampai TX selesai
 
-    Serial.printf("[TAG-%d] Broadcast — Seq=%d | TS=%lu ms\n",
+    serial_printf("[TAG-%d] Broadcast — Seq=%d | TS=%lu ms\n",
                   TAG_ID, pkt.seq, pkt.timestamp);
 }

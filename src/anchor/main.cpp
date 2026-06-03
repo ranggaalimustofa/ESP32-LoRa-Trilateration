@@ -95,6 +95,19 @@ void loop() {
     }
     mqttClient.loop();
 
+    // Kirim heartbeat berkala ke MQTT (setiap 5 detik) agar server tahu jangkar ini aktif
+    static unsigned long lastHeartbeat = 0;
+    if (millis() - lastHeartbeat >= 5000) {
+        lastHeartbeat = millis();
+        StaticJsonDocument<128> hbDoc;
+        hbDoc["heartbeat"] = true;
+        hbDoc["anchorId"] = ANCHOR_ID;
+        String hbPayload;
+        serializeJson(hbDoc, hbPayload);
+        mqttClient.publish(MQTT_TOPIC, hbPayload.c_str());
+        Serial.printf("[ANCHOR-%d] Sent direct heartbeat to MQTT\n", ANCHOR_ID);
+    }
+
     // Polling LoRa
     int packetSize = LoRa.parsePacket();
     if (packetSize == 0) return;
