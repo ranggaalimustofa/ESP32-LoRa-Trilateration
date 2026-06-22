@@ -100,25 +100,18 @@ void broadcastTag() {
 // ─── Membaca persentase sisa baterai ─────────────────────────────────────────
 uint8_t readBatteryPercentage() {
     float voltage = 0.0f;
-    // Tegangan LDO terukur adalah 3.355V
-    const float vRef = 3.355f;
+    const float vRef = 3.3f;
     
     #if defined(ARDUINO_ARCH_AVR)
         // Arduino Pro Mini (10-bit ADC)
         int raw = analogRead(BATTERY_PIN);
-        // Pembagi tegangan dengan 2 resistor 10k Ohm (faktor pengali 2.0x)
+        // Asumsi pembagi tegangan 2x (misal resistor 100k/100k)
         voltage = (raw * vRef / 1023.0f) * 2.0f;
     #else
         // ESP32 (12-bit ADC)
         int raw = analogRead(BATTERY_PIN);
-        // Pembagi tegangan dengan 2 resistor 10k Ohm (faktor pengali 2.0x)
-        float rawVoltage = (raw * vRef / 4095.0f) * 2.0f;
-        
-        // Kalibrasi khusus ESP32 untuk mengoreksi offset non-linearitas ADC internal:
-        // Input 4.2V menghasilkan perhitungan awal ~4.17V
-        // Input 3.2V menghasilkan perhitungan awal ~3.355V
-        // Kita lakukan pemetaan linear agar 3.355V terbaca sebagai 3.2V, dan 4.17V terbaca sebagai 4.2V:
-        voltage = 3.2f + (rawVoltage - 3.355f) * (4.2f - 3.2f) / (4.17f - 3.355f);
+        // Asumsi pembagi tegangan 2x (misal resistor 100k/100k)
+        voltage = (raw * 3.3f / 4095.0f) * 2.0f;
     #endif
 
     // Konversi voltase ke persentase (3.2V = 0%, 4.2V = 100%)
