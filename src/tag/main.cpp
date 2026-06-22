@@ -31,6 +31,7 @@ void serial_printf(const char *fmt, ...) {
 // ─── Prototypes ──────────────────────────────────────────────────────────────
 void initLoRa();
 void broadcastTag();
+uint8_t readBatteryPercentage();
 
 // ─── State ───────────────────────────────────────────────────────────────────
 static uint16_t seqNumber    = 0;
@@ -40,6 +41,8 @@ static uint32_t lastBroadcast = 0;
 void setup() {
     Serial.begin(SERIAL_BAUD);
     while (!Serial);
+
+    pinMode(BATTERY_PIN, INPUT);
 
     serial_printf("[TAG-%d] Booting...\n", TAG_ID);
     initLoRa();
@@ -83,12 +86,38 @@ void broadcastTag() {
     pkt.tag_id    = TAG_ID;
     pkt.timestamp = millis();
     pkt.seq       = seqNumber++;
+    pkt.battery   = readBatteryPercentage();
 
     // Kirim paket sebagai raw bytes
     LoRa.beginPacket();
     LoRa.write((uint8_t *)&pkt, sizeof(TagPacket));
     LoRa.endPacket();   // Blocking — tunggu sampai TX selesai
 
-    serial_printf("[TAG-%d] Broadcast — Seq=%d | TS=%lu ms\n",
-                  TAG_ID, pkt.seq, pkt.timestamp);
+    serial_printf("[TAG-%d] Broadcast — Seq=%d | TS=%lu ms | Bat=%d%%\n",
+                  TAG_ID, pkt.seq, pkt.timestamp, pkt.battery);
+}
+
+// ─── Membaca persentase sisa baterai ─────────────────────────────────────────
+uint8_t readBatteryPercentage() {
+    float voltage = 0.0f;
+    const float vRef = 3.3f;
+    
+    #if defined(ARDUINO_ARCH_AVR)
+        // Arduino Pro Mini (10-bit ADC)
+        int raw = analogRead(BATTERY_PIN);
+        // Asumsi pembagi tegangan 2x (misal resistor 100k/100k)
+        voltage = (raw * vRef / 1023.0f) * 2.0f;
+    #else
+        // ESP32 (12-bit ADC)
+        int raw = analogRead(BATTERY_PIN);
+        // Asumsi pembagi tegangan 2x (misal resistor 100k/100k)
+        voltage = (raw * 3.3f / 4095.0f) * 2.0f;
+    #endif
+
+    // Konversi voltase ke persentase (3.2V = 0%, 4.2V = 100%)
+    int pct = (int)((voltage - 3.2f) / (4.2f - 3.2f) * 100.0f);
+    if (pct > 100) pct = 100;
+    if (pct < 0) pct = 0;
+    
+    return (uint8_t)pct;
 }

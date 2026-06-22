@@ -293,6 +293,7 @@ bool parsePacket(AnchorReport &report) {
     report.anchor_ts = (uint32_t)millis();
     report.rssi      = (int8_t)LoRa.packetRssi();
     report.snr       = (int8_t)LoRa.packetSnr();
+    report.battery   = pkt.battery;
 
     return true;
 }
@@ -314,7 +315,7 @@ void sendReportToServer(const AnchorReport &report) {
 
     StaticJsonDocument<256> doc;
     doc["tagId"] = "tag-" + String(report.tag_id);
-    doc["battery"] = 100;
+    doc["battery"] = report.battery;
     
     JsonArray anchors = doc.createNestedArray("anchors");
     JsonObject anchorObj = anchors.createNestedObject();

@@ -11,6 +11,13 @@
   #define LORA_DIO0  2    // DIO0 untuk ESP32
 #endif
 
+// ─── Pin Baterai ─────────────────────────────────────────────────────────────
+#if defined(ARDUINO_ARCH_AVR)
+  #define BATTERY_PIN    A0   // Pin A0 untuk Arduino Pro Mini
+#else
+  #define BATTERY_PIN    34   // Pin GPIO34 (ADC1) untuk ESP32
+#endif
+
 // ─── Parameter LoRa ──────────────────────────────────────────────────────────
 #define LORA_FREQ        433E6   // Frekuensi: 433E6 / 868E6 / 915E6
 #define LORA_SF          7       // Spreading Factor (6–12)
