@@ -102,10 +102,11 @@ void loop() {
         StaticJsonDocument<128> hbDoc;
         hbDoc["heartbeat"] = true;
         hbDoc["anchorId"] = ANCHOR_ID;
+        hbDoc["ip"] = WiFi.localIP().toString();
         String hbPayload;
         serializeJson(hbDoc, hbPayload);
         mqttClient.publish(MQTT_TOPIC, hbPayload.c_str());
-        Serial.printf("[ANCHOR-%d] Sent direct heartbeat to MQTT\n", ANCHOR_ID);
+        Serial.printf("[ANCHOR-%d] Sent direct heartbeat to MQTT (IP: %s)\n", ANCHOR_ID, hbDoc["ip"].as<const char*>());
     }
 
     // Polling LoRa
